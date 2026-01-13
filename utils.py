@@ -8,14 +8,29 @@ DATA_DIR = "data"
 os.makedirs(DATA_DIR, exist_ok=True)
 
 def load_data(filename, default=None):
-    """Carrega dados de um arquivo JSON"""
+    """Carrega dados de um arquivo JSON com tratamento de erros"""
     if default is None:
-        default = []
+        default = [] if filename.endswith(".json") and "users" not in filename else {}
 
     filepath = os.path.join(DATA_DIR, filename)
+
     if os.path.exists(filepath):
-        with open(filepath, 'r', encoding='utf-8') as f:
-            return json.load(f)
+        try:
+            with open(filepath, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+
+            # Aplica migrações se necessário
+            if filename == "recommendations.json":
+                data = migrate_recommendations(data)
+            elif filename == "users.json":
+                data = migrate_users(data)
+            elif filename == "groups.json":
+                data = migrate_groups(data)
+
+            return data
+        except json.JSONDecodeError:
+            print(f"⚠️  Erro ao ler {filename}, retornando valor padrão")
+            return default
     return default
 
 def save_data(filename, data):
@@ -38,9 +53,122 @@ def init_default_data():
     if not os.path.exists(recs_file):
         save_data("recommendations.json", [])
 
-init_default_data()
+# ==================== SISTEMA DE MIGRAÇÃO ====================
 
-# Funções para gerenciar grupo do usuário
+def migrate_recommendations(recommendations):
+    """Migra recomendações antigas para nova estrutura"""
+    if not isinstance(recommendations, list):
+        return recommendations
+
+    migrated = False
+
+    for rec in recommendations:
+        # Versão 1.0 → 1.1: Adiciona campos de dislike
+        if "dislikes" not in rec:
+            rec["dislikes"] = 0
+            migrated = True
+
+        if "disliked_by" not in rec:
+            rec["disliked_by"] = []
+            migrated = True
+
+        # Versão 1.1 → 1.2: Garante campos obrigatórios
+        required_fields = ["id", "title", "description", "category", "rating",
+                          "tags", "author", "group_id", "created_at", "likes", "liked_by"]
+
+        for field in required_fields:
+            if field not in rec:
+                if field == "tags":
+                    rec[field] = []
+                elif field == "likes":
+                    rec[field] = 0
+                elif field == "liked_by":
+                    rec[field] = []
+                elif field == "created_at":
+                    rec[field] = datetime.now().isoformat()
+                else:
+                    rec[field] = ""
+                migrated = True
+
+    if migrated:
+        print("🔄 Recomendações migradas para nova versão")
+        save_data("recommendations.json", recommendations)
+
+    return recommendations
+
+def migrate_users(users):
+    """Migra usuários antigos para nova estrutura"""
+    if not isinstance(users, dict):
+        return users
+
+    migrated = False
+
+    for username, user_data in users.items():
+        # Se user_data não é dicionário (estrutura muito antiga)
+        if not isinstance(user_data, dict):
+            users[username] = {
+                "password": user_data,
+                "created_at": datetime.now().isoformat(),
+                "preferred_group": None,
+                "last_group": None
+            }
+            migrated = True
+        else:
+            # Versão 1.0 → 1.1: Adiciona campos de grupo preferido
+            if "preferred_group" not in user_data:
+                user_data["preferred_group"] = None
+                migrated = True
+
+            if "last_group" not in user_data:
+                user_data["last_group"] = None
+                migrated = True
+
+            # Versão 1.1 → 1.2: Adiciona campo created_at se não existir
+            if "created_at" not in user_data:
+                user_data["created_at"] = datetime.now().isoformat()
+                migrated = True
+
+    if migrated:
+        print("🔄 Usuários migrados para nova versão")
+        save_data("users.json", users)
+
+    return users
+
+def migrate_groups(groups):
+    """Migra grupos antigos para nova estrutura"""
+    if not isinstance(groups, list):
+        return groups
+
+    migrated = False
+
+    for group in groups:
+        # Versão 1.0 → 1.1: Adiciona campo is_public
+        if "is_public" not in group:
+            group["is_public"] = True
+            migrated = True
+
+        # Garante campos obrigatórios
+        required_fields = ["id", "name", "description", "categories",
+                          "created_by", "created_at", "members"]
+
+        for field in required_fields:
+            if field not in group:
+                if field == "categories":
+                    group[field] = []
+                elif field == "members":
+                    group[field] = []
+                elif field == "created_at":
+                    group[field] = datetime.now().isoformat()
+                else:
+                    group[field] = ""
+                migrated = True
+
+    if migrated:
+        print("🔄 Grupos migrados para nova versão")
+        save_data("groups.json", groups)
+
+    return groups
+
 def save_user_preferred_group(username, group_id):
     """Salva o grupo preferido/último do usuário"""
     users = load_data("users.json", {})
@@ -68,18 +196,12 @@ def get_user_last_group(username):
         return users[username].get("last_group")
     return None
 
-# Função para atualizar usuários existentes (executar uma vez)
-def update_existing_users():
-    """Atualiza estrutura de usuários existentes"""
-    users = load_data("users.json", {})
+# Inicializa dados e aplica migrações
+init_default_data()
 
-    for username in users:
-        if "preferred_group" not in users[username]:
-            users[username]["preferred_group"] = None
-            users[username]["last_group"] = None
-
-    save_data("users.json", users)
-    print("✅ Usuários atualizados!")
-
-# Execute uma vez se necessário
-# update_existing_users()
+# Carrega e migra todos os dados na inicialização
+print("🔍 Verificando migrações necessárias...")
+load_data("users.json")
+load_data("groups.json")
+load_data("recommendations.json")
+print("✅ Sistema de migração pronto!")
