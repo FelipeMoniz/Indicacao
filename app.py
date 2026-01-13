@@ -903,6 +903,19 @@ def main_app():
     elif st.session_state.page == "my_recommendations":
         render_my_recommendations_page()
 
+# ========== NOVO: BOTÃO DE ATUALIZAR ==========
+    st.sidebar.markdown("---")
+
+    # Botão principal de atualização
+    if st.sidebar.button("🔄 Atualizar Página",
+                        use_container_width=True,
+                        type="secondary",  # Ou "primary" para destacar mais
+                        help="Recarrega a página mantendo seu login"):
+        rerun()
+
+    # Informação útil
+    st.sidebar.caption("Pressione F5 no navegador para atualizar")
+
 # ==================== PONTO DE ENTRADA DA APLICAÇÃO ====================
 
 def main():
@@ -912,4 +925,9 @@ def main():
         login_page()
 
 if __name__ == "__main__":
+    # Verifica se há dados antigos para migrar
+    import os
+    if os.path.exists("data/users.json") or os.path.exists("data/groups.json"):
+        print("🔄 Migrando dados antigos para SQLite...")
+
     main()

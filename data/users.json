@@ -1,6 +1,8 @@
 {
   "Det": {
     "password": "#Detdet123",
-    "created_at": "2026-01-13T11:22:54.844486"
+    "created_at": "2026-01-13T11:22:54.844486",
+    "preferred_group": 1,
+    "last_group": 1
   }
 }

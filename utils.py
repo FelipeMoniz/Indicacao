@@ -1,207 +1,246 @@
+import sqlite3
 import json
 import os
 from datetime import datetime
 
-DATA_DIR = "data"
+DB_FILE = "indica_app.db"
 
-# Garante que o diretório de dados existe
-os.makedirs(DATA_DIR, exist_ok=True)
+def init_database():
+    """Inicializa o banco de dados SQLite"""
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
 
-def load_data(filename, default=None):
-    """Carrega dados de um arquivo JSON com tratamento de erros"""
+    # Tabela de usuários
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS users (
+            username TEXT PRIMARY KEY,
+            password TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            preferred_group INTEGER,
+            last_group INTEGER
+        )
+    ''')
+
+    # Tabela de grupos
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS groups (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL UNIQUE,
+            description TEXT,
+            categories TEXT,
+            created_by TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            members TEXT,
+            is_public BOOLEAN DEFAULT 1
+        )
+    ''')
+
+    # Tabela de recomendações
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS recommendations (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            title TEXT NOT NULL,
+            description TEXT,
+            category TEXT,
+            rating INTEGER,
+            tags TEXT,
+            author TEXT NOT NULL,
+            group_id INTEGER NOT NULL,
+            created_at TEXT NOT NULL,
+            likes INTEGER DEFAULT 0,
+            dislikes INTEGER DEFAULT 0,
+            liked_by TEXT,
+            disliked_by TEXT
+        )
+    ''')
+
+    conn.commit()
+    conn.close()
+
+def load_data(table_name, default=None):
+    """Carrega dados de uma tabela - mantém compatibilidade"""
     if default is None:
-        default = [] if filename.endswith(".json") and "users" not in filename else {}
+        default = [] if table_name != "users" else {}
 
-    filepath = os.path.join(DATA_DIR, filename)
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
 
-    if os.path.exists(filepath):
-        try:
-            with open(filepath, 'r', encoding='utf-8') as f:
-                data = json.load(f)
+    try:
+        cursor.execute(f"SELECT * FROM {table_name}")
+        columns = [description[0] for description in cursor.description]
+        rows = cursor.fetchall()
 
-            # Aplica migrações se necessário
-            if filename == "recommendations.json":
-                data = migrate_recommendations(data)
-            elif filename == "users.json":
-                data = migrate_users(data)
-            elif filename == "groups.json":
-                data = migrate_groups(data)
-
-            return data
-        except json.JSONDecodeError:
-            print(f"⚠️  Erro ao ler {filename}, retornando valor padrão")
-            return default
-    return default
-
-def save_data(filename, data):
-    """Salva dados em um arquivo JSON"""
-    filepath = os.path.join(DATA_DIR, filename)
-    with open(filepath, 'w', encoding='utf-8') as f:
-        json.dump(data, f, indent=2, ensure_ascii=False)
-
-def init_default_data():
-    """Inicializa dados padrão se não existirem"""
-    users_file = os.path.join(DATA_DIR, "users.json")
-    if not os.path.exists(users_file):
-        save_data("users.json", {})
-
-    groups_file = os.path.join(DATA_DIR, "groups.json")
-    if not os.path.exists(groups_file):
-        save_data("groups.json", [])
-
-    recs_file = os.path.join(DATA_DIR, "recommendations.json")
-    if not os.path.exists(recs_file):
-        save_data("recommendations.json", [])
-
-# ==================== SISTEMA DE MIGRAÇÃO ====================
-
-def migrate_recommendations(recommendations):
-    """Migra recomendações antigas para nova estrutura"""
-    if not isinstance(recommendations, list):
-        return recommendations
-
-    migrated = False
-
-    for rec in recommendations:
-        # Versão 1.0 → 1.1: Adiciona campos de dislike
-        if "dislikes" not in rec:
-            rec["dislikes"] = 0
-            migrated = True
-
-        if "disliked_by" not in rec:
-            rec["disliked_by"] = []
-            migrated = True
-
-        # Versão 1.1 → 1.2: Garante campos obrigatórios
-        required_fields = ["id", "title", "description", "category", "rating",
-                          "tags", "author", "group_id", "created_at", "likes", "liked_by"]
-
-        for field in required_fields:
-            if field not in rec:
-                if field == "tags":
-                    rec[field] = []
-                elif field == "likes":
-                    rec[field] = 0
-                elif field == "liked_by":
-                    rec[field] = []
-                elif field == "created_at":
-                    rec[field] = datetime.now().isoformat()
-                else:
-                    rec[field] = ""
-                migrated = True
-
-    if migrated:
-        print("🔄 Recomendações migradas para nova versão")
-        save_data("recommendations.json", recommendations)
-
-    return recommendations
-
-def migrate_users(users):
-    """Migra usuários antigos para nova estrutura"""
-    if not isinstance(users, dict):
-        return users
-
-    migrated = False
-
-    for username, user_data in users.items():
-        # Se user_data não é dicionário (estrutura muito antiga)
-        if not isinstance(user_data, dict):
-            users[username] = {
-                "password": user_data,
-                "created_at": datetime.now().isoformat(),
-                "preferred_group": None,
-                "last_group": None
-            }
-            migrated = True
+        if table_name == "users":
+            data = {}
+            for row in rows:
+                user_data = {
+                    "password": row[1],
+                    "created_at": row[2],
+                    "preferred_group": row[3],
+                    "last_group": row[4]
+                }
+                data[row[0]] = user_data
         else:
-            # Versão 1.0 → 1.1: Adiciona campos de grupo preferido
-            if "preferred_group" not in user_data:
-                user_data["preferred_group"] = None
-                migrated = True
+            data = []
+            for row in rows:
+                item = dict(zip(columns, row))
 
-            if "last_group" not in user_data:
-                user_data["last_group"] = None
-                migrated = True
+                # Converte campos JSON para lista
+                json_fields = []
+                if table_name == "groups":
+                    json_fields = ['categories', 'members']
+                elif table_name == "recommendations":
+                    json_fields = ['tags', 'liked_by', 'disliked_by']
 
-            # Versão 1.1 → 1.2: Adiciona campo created_at se não existir
-            if "created_at" not in user_data:
-                user_data["created_at"] = datetime.now().isoformat()
-                migrated = True
+                for field in json_fields:
+                    if field in item and item[field]:
+                        try:
+                            item[field] = json.loads(item[field])
+                        except:
+                            item[field] = []
+                    elif field in item:
+                        item[field] = []
 
-    if migrated:
-        print("🔄 Usuários migrados para nova versão")
-        save_data("users.json", users)
+                # Converte tipos
+                if 'id' in item:
+                    item['id'] = int(item['id'])
+                if 'rating' in item:
+                    item['rating'] = int(item['rating']) if item['rating'] else 0
+                if 'likes' in item:
+                    item['likes'] = int(item['likes']) if item['likes'] else 0
+                if 'dislikes' in item:
+                    item['dislikes'] = int(item['dislikes']) if item['dislikes'] else 0
+                if 'group_id' in item:
+                    item['group_id'] = int(item['group_id']) if item['group_id'] else 0
+                if 'is_public' in item:
+                    item['is_public'] = bool(item['is_public'])
 
-    return users
+                data.append(item)
 
-def migrate_groups(groups):
-    """Migra grupos antigos para nova estrutura"""
-    if not isinstance(groups, list):
-        return groups
+        return data
+    except Exception as e:
+        print(f"⚠️  Carregando {table_name}: {e}")
+        return default
+    finally:
+        conn.close()
 
-    migrated = False
+def save_data(table_name, data):
+    """Salva dados em uma tabela - mantém compatibilidade"""
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
 
-    for group in groups:
-        # Versão 1.0 → 1.1: Adiciona campo is_public
-        if "is_public" not in group:
-            group["is_public"] = True
-            migrated = True
+    try:
+        if table_name == "users":
+            for username, user_data in data.items():
+                cursor.execute('''
+                    INSERT OR REPLACE INTO users
+                    (username, password, created_at, preferred_group, last_group)
+                    VALUES (?, ?, ?, ?, ?)
+                ''', (
+                    username,
+                    user_data.get('password', ''),
+                    user_data.get('created_at', datetime.now().isoformat()),
+                    user_data.get('preferred_group'),
+                    user_data.get('last_group')
+                ))
 
-        # Garante campos obrigatórios
-        required_fields = ["id", "name", "description", "categories",
-                          "created_by", "created_at", "members"]
+        elif table_name == "groups":
+            cursor.execute("DELETE FROM groups")
+            for item in data:
+                cursor.execute('''
+                    INSERT INTO groups
+                    (id, name, description, categories, created_by, created_at, members, is_public)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ''', (
+                    item.get('id'),
+                    item.get('name', ''),
+                    item.get('description', ''),
+                    json.dumps(item.get('categories', [])),
+                    item.get('created_by', ''),
+                    item.get('created_at', datetime.now().isoformat()),
+                    json.dumps(item.get('members', [])),
+                    1 if item.get('is_public', True) else 0
+                ))
 
-        for field in required_fields:
-            if field not in group:
-                if field == "categories":
-                    group[field] = []
-                elif field == "members":
-                    group[field] = []
-                elif field == "created_at":
-                    group[field] = datetime.now().isoformat()
-                else:
-                    group[field] = ""
-                migrated = True
+        elif table_name == "recommendations":
+            cursor.execute("DELETE FROM recommendations")
+            for item in data:
+                cursor.execute('''
+                    INSERT INTO recommendations
+                    (id, title, description, category, rating, tags, author, group_id, created_at, likes, dislikes, liked_by, disliked_by)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ''', (
+                    item.get('id'),
+                    item.get('title', ''),
+                    item.get('description', ''),
+                    item.get('category', ''),
+                    item.get('rating', 0),
+                    json.dumps(item.get('tags', [])),
+                    item.get('author', ''),
+                    item.get('group_id', 0),
+                    item.get('created_at', datetime.now().isoformat()),
+                    item.get('likes', 0),
+                    item.get('dislikes', 0),
+                    json.dumps(item.get('liked_by', [])),
+                    json.dumps(item.get('disliked_by', []))
+                ))
 
-    if migrated:
-        print("🔄 Grupos migrados para nova versão")
-        save_data("groups.json", groups)
+        conn.commit()
+        return True
 
-    return groups
+    except Exception as e:
+        print(f"❌ Erro ao salvar {table_name}: {e}")
+        return False
 
+    finally:
+        conn.close()
+
+# Funções auxiliares para compatibilidade
 def save_user_preferred_group(username, group_id):
-    """Salva o grupo preferido/último do usuário"""
-    users = load_data("users.json", {})
-
+    users = load_data("users", {})
     if username in users:
         users[username]["preferred_group"] = group_id
         users[username]["last_group"] = group_id
-        save_data("users.json", users)
+        save_data("users", users)
         return True
     return False
 
 def get_user_preferred_group(username):
-    """Obtém o grupo preferido/último do usuário"""
-    users = load_data("users.json", {})
-
+    users = load_data("users", {})
     if username in users:
         return users[username].get("preferred_group")
     return None
 
 def get_user_last_group(username):
-    """Obtém o último grupo acessado pelo usuário"""
-    users = load_data("users.json", {})
-
+    users = load_data("users", {})
     if username in users:
         return users[username].get("last_group")
     return None
 
-# Inicializa dados e aplica migrações
-init_default_data()
+# Migra dados antigos se existirem
+def migrate_old_data():
+    """Migra dados dos arquivos JSON antigos para o SQLite"""
+    old_files = {
+        "users.json": "users",
+        "groups.json": "groups",
+        "recommendations.json": "recommendations"
+    }
 
-# Carrega e migra todos os dados na inicialização
-print("🔍 Verificando migrações necessárias...")
-load_data("users.json")
-load_data("groups.json")
-load_data("recommendations.json")
-print("✅ Sistema de migração pronto!")
+    for filename, table_name in old_files.items():
+        if os.path.exists(f"data/{filename}"):
+            try:
+                with open(f"data/{filename}", 'r', encoding='utf-8') as f:
+                    old_data = json.load(f)
+
+                if old_data:
+                    save_data(table_name, old_data)
+                    print(f"✅ Migrados dados de {filename}")
+
+                    # Renomeia arquivo antigo para backup
+                    os.rename(f"data/{filename}", f"data/{filename}.backup")
+            except Exception as e:
+                print(f"⚠️  Não foi possível migrar {filename}: {e}")
+
+# Inicializa o banco e migra dados
+init_database()
+migrate_old_data()
