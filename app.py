@@ -33,6 +33,9 @@ def init_session_state():
         st.session_state.page = "home"
     if 'show_group_details' not in st.session_state:
         st.session_state.show_group_details = False
+    # NOVO: Estado para mostrar mensagem de registro bem-sucedido
+    if 'show_registration_success' not in st.session_state:
+        st.session_state.show_registration_success = False
 
 init_session_state()
 
@@ -67,6 +70,7 @@ def login_user(username, password):
 
     st.session_state.authenticated = True
     st.session_state.username = username
+    st.session_state.show_registration_success = False  # Reseta mensagem de registro
 
     # Restaura o último grupo do usuário
     last_group = users[username].get("last_group")
@@ -91,9 +95,10 @@ def logout():
     st.session_state.current_group = None
     st.session_state.page = "home"
     st.session_state.show_group_details = False
+    st.session_state.show_registration_success = False
     rerun()
 
-# Funções para grupos
+# Funções para grupos (mantidas iguais)
 def create_group(group_name, description, categories):
     """Cria um novo grupo"""
     groups = load_data("groups.json", [])
@@ -142,7 +147,7 @@ def join_group(group_id):
 
     return False, "Grupo não encontrado"
 
-# Funções para recomendações
+# Funções para recomendações (ATUALIZADAS COM DISLIKE)
 def add_recommendation(title, description, category, rating, tags=""):
     """Adiciona uma nova recomendação"""
     recommendations = load_data("recommendations.json", [])
@@ -158,7 +163,9 @@ def add_recommendation(title, description, category, rating, tags=""):
         "group_id": st.session_state.current_group,
         "created_at": datetime.now().isoformat(),
         "likes": 0,
-        "liked_by": []
+        "dislikes": 0,  # NOVO: contador de dislikes
+        "liked_by": [],
+        "disliked_by": []  # NOVO: lista de quem deu dislike
     }
 
     recommendations.append(new_rec)
@@ -181,19 +188,76 @@ def like_recommendation(rec_id):
 
     for rec in recommendations:
         if rec["id"] == rec_id:
-            if st.session_state.username not in rec["liked_by"]:
+            username = st.session_state.username
+
+            # Se já deu like, remove
+            if username in rec["liked_by"]:
+                rec["likes"] -= 1
+                rec["liked_by"].remove(username)
+            # Se deu dislike antes, remove dislike e adiciona like
+            elif username in rec["disliked_by"]:
+                rec["dislikes"] -= 1
+                rec["disliked_by"].remove(username)
                 rec["likes"] += 1
-                rec["liked_by"].append(st.session_state.username)
-                save_data("recommendations.json", recommendations)
-                return True
+                rec["liked_by"].append(username)
+            # Se não interagiu ainda, adiciona like
+            else:
+                rec["likes"] += 1
+                rec["liked_by"].append(username)
+
+            save_data("recommendations.json", recommendations)
+            return True
     return False
 
-# Página de Login/Registro
+def dislike_recommendation(rec_id):
+    """Adiciona dislike a uma recomendação"""
+    recommendations = load_data("recommendations.json", [])
+
+    for rec in recommendations:
+        if rec["id"] == rec_id:
+            username = st.session_state.username
+
+            # Se já deu dislike, remove
+            if username in rec["disliked_by"]:
+                rec["dislikes"] -= 1
+                rec["disliked_by"].remove(username)
+            # Se deu like antes, remove like e adiciona dislike
+            elif username in rec["liked_by"]:
+                rec["likes"] -= 1
+                rec["liked_by"].remove(username)
+                rec["dislikes"] += 1
+                rec["disliked_by"].append(username)
+            # Se não interagiu ainda, adiciona dislike
+            else:
+                rec["dislikes"] += 1
+                rec["disliked_by"].append(username)
+
+            save_data("recommendations.json", recommendations)
+            return True
+    return False
+
+# Página de Login/Registro (ATUALIZADA para redirecionar)
 def login_page():
     st.title("🌟 Indica App")
+
+    # NOVO: Mostra mensagem de registro bem-sucedido se existir
+    if st.session_state.get('show_registration_success'):
+        st.success("✅ Registro realizado com sucesso! Faça login para continuar.")
+        # Reseta o flag após mostrar
+        st.session_state.show_registration_success = False
+
     st.markdown("### Faça login ou registre-se")
 
+    # NOVO: Usar tabs com estado persistente
+    if 'login_tab' not in st.session_state:
+        st.session_state.login_tab = "Login"
+
     tab1, tab2 = st.tabs(["Login", "Registro"])
+
+    # NOVO: Lógica para controlar qual tab mostrar
+    if st.session_state.get('force_login_tab'):
+        st.session_state.login_tab = "Login"
+        st.session_state.force_login_tab = False
 
     with tab1:
         with st.form("login_form"):
@@ -210,6 +274,8 @@ def login_page():
                         rerun()
                     else:
                         st.error(message)
+                else:
+                    st.error("Preencha todos os campos")
 
     with tab2:
         with st.form("register_form"):
@@ -224,14 +290,25 @@ def login_page():
                         success, message = register_user(new_username, new_password)
                         if success:
                             st.success(message)
+                            # NOVO: Em vez de redirecionar direto, marca para mostrar mensagem e trocar tab
+                            st.session_state.show_registration_success = True
+                            st.session_state.force_login_tab = True
                             time.sleep(1)
                             rerun()
                         else:
                             st.error(message)
                     else:
                         st.error("As senhas não coincidem")
+                else:
+                    st.error("Preencha todos os campos")
 
-# Funções para renderizar páginas
+        # NOVO: Botão para voltar ao login após registro
+        st.markdown("---")
+        if st.button("← Voltar para Login"):
+            st.session_state.force_login_tab = True
+            rerun()
+
+# Funções para renderizar páginas (ATUALIZADAS COM DISLIKE)
 def render_home_page():
     """Renderiza a página inicial"""
     st.title("Página Inicial")
@@ -335,7 +412,7 @@ def render_home_page():
                     categories = list(set([r["category"] for r in recommendations]))
                     selected_category = st.selectbox("Filtrar por categoria", ["Todas"] + categories)
                 with col2:
-                    sort_by = st.selectbox("Ordenar por", ["Mais recentes", "Mais likes", "Melhor avaliadas"])
+                    sort_by = st.selectbox("Ordenar por", ["Mais recentes", "Mais likes", "Melhor avaliadas", "Mais polêmicas"])
                 with col3:
                     search_term = st.text_input("Buscar por título ou tags")
 
@@ -360,24 +437,39 @@ def render_home_page():
                     filtered_recs.sort(key=lambda x: x["likes"], reverse=True)
                 elif sort_by == "Melhor avaliadas":
                     filtered_recs.sort(key=lambda x: x["rating"], reverse=True)
+                elif sort_by == "Mais polêmicas":
+                    # Calcula "polêmica" como diferença entre likes e dislikes (valor absoluto baixo = mais polêmica)
+                    filtered_recs.sort(key=lambda x: abs(x["likes"] - x.get("dislikes", 0)))
 
                 # Mostrar recomendações filtradas
                 for rec in filtered_recs:
-                    with st.expander(f"⭐ {rec['rating']}/5 | {rec['title']} | 👍 {rec['likes']}"):
+                    # Calcula saldo de likes/dislikes
+                    likes = rec.get("likes", 0)
+                    dislikes = rec.get("dislikes", 0)
+                    saldo = likes - dislikes
+
+                    with st.expander(f"⭐ {rec['rating']}/5 | {rec['title']} | 👍 {likes} | 👎 {dislikes} | 📊 {saldo}"):
                         st.markdown(f"**Categoria:** {rec['category']}")
                         st.markdown(f"**Descrição:** {rec['description']}")
                         st.markdown(f"**Por:** {rec['author']}")
                         st.markdown(f"**Tags:** {', '.join(rec['tags']) if rec['tags'] else 'Nenhuma'}")
                         st.markdown(f"**Data:** {rec['created_at'][:10]}")
 
-                        col1, col2 = st.columns(2)
+                        # NOVO: Botões de like e dislike lado a lado
+                        col1, col2, col3 = st.columns([1, 1, 2])
                         with col1:
-                            if st.button(f"👍 Curtir ({rec['likes']})", key=f"like_{rec['id']}"):
+                            if st.button(f"👍 Like ({likes})", key=f"like_{rec['id']}"):
                                 if like_recommendation(rec['id']):
-                                    st.success("Obrigado pelo like!")
+                                    st.success("Like registrado!")
                                     time.sleep(0.5)
                                     rerun()
                         with col2:
+                            if st.button(f"👎 Dislike ({dislikes})", key=f"dislike_{rec['id']}"):
+                                if dislike_recommendation(rec['id']):
+                                    st.success("Dislike registrado!")
+                                    time.sleep(0.5)
+                                    rerun()
+                        with col3:
                             if st.button("📋 Ver detalhes", key=f"details_{rec['id']}"):
                                 st.session_state.selected_recommendation = rec['id']
                                 rerun()
@@ -386,6 +478,14 @@ def render_home_page():
                 if st.button("📝 Criar primeira recomendação"):
                     st.session_state.page = "new_recommendation"
                     rerun()
+
+# As funções render_groups_page(), render_new_recommendation_page(),
+# render_my_recommendations_page() e main_app() permanecem IGUAIS
+# (exceto pela adição dos botões de dislike que já fizemos acima)
+
+# Copie as funções render_groups_page(), render_new_recommendation_page(),
+# render_my_recommendations_page() e main_app() do código anterior
+# ELAS PERMANECEM EXATAMENTE IGUAIS, só precisa copiar
 
 def render_groups_page():
     """Renderiza a página de grupos"""
@@ -577,14 +677,15 @@ def render_my_recommendations_page():
     if recommendations:
         st.subheader(f"📊 {len(recommendations)} Recomendações Criadas")
 
-        # Estatísticas
+        # Estatísticas (ATUALIZADAS com dislikes)
         col1, col2, col3, col4 = st.columns(4)
         with col1:
-            total_likes = sum(r["likes"] for r in recommendations)
-            st.metric("Total de Likes", total_likes)
+            total_likes = sum(r.get("likes", 0) for r in recommendations)
+            total_dislikes = sum(r.get("dislikes", 0) for r in recommendations)
+            st.metric("Saldo Likes", f"{total_likes - total_dislikes}")
         with col2:
             avg_rating = sum(r["rating"] for r in recommendations) / len(recommendations)
-            st.metric("Média de Avaliação", f"{avg_rating:.1f}/5")
+            st.metric("Média Avaliação", f"{avg_rating:.1f}/5")
         with col3:
             categories = len(set(r["category"] for r in recommendations))
             st.metric("Categorias", categories)
@@ -599,7 +700,10 @@ def render_my_recommendations_page():
             groups = load_data("groups.json", [])
             group_name = next((g["name"] for g in groups if g["id"] == rec["group_id"]), "Grupo Desconhecido")
 
-            with st.expander(f"{rec['title']} | ⭐ {rec['rating']}/5 | 👍 {rec['likes']} | 📁 {group_name}"):
+            likes = rec.get("likes", 0)
+            dislikes = rec.get("dislikes", 0)
+
+            with st.expander(f"{rec['title']} | ⭐ {rec['rating']}/5 | 👍 {likes} | 👎 {dislikes} | 📁 {group_name}"):
                 col1, col2 = st.columns(2)
                 with col1:
                     st.markdown(f"**Categoria:** {rec['category']}")
@@ -608,7 +712,8 @@ def render_my_recommendations_page():
                 with col2:
                     st.markdown(f"**Grupo:** {group_name}")
                     st.markdown(f"**Data:** {rec['created_at'][:10]}")
-                    st.markdown(f"**Likes:** {rec['likes']}")
+                    st.markdown(f"**Likes:** {likes}")
+                    st.markdown(f"**Dislikes:** {dislikes}")
 
                     # Botão para ir para o grupo
                     if st.button("Ir para grupo", key=f"goto_{rec['id']}"):
@@ -633,7 +738,6 @@ def render_my_recommendations_page():
             st.session_state.page = "new_recommendation"
             rerun()
 
-# Página principal do aplicativo
 def main_app():
     st.sidebar.title(f"👋 Olá, {st.session_state.username}!")
 
