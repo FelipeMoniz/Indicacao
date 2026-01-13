@@ -534,6 +534,10 @@ def render_home_page():
                                     st.success("Interação registrada!")
                                     time.sleep(0.5)
                                     rerun()
+                        with col3:
+                            if st.button("📋 Ver detalhes", key=f"details_{rec.get('id')}"):
+                                st.session_state.selected_recommendation = rec.get('id')
+                                rerun()
             else:
                 st.info("Nenhuma recomendação neste grupo ainda. Seja o primeiro a compartilhar!")
                 if st.button("📝 Criar primeira recomendação"):
@@ -582,6 +586,9 @@ def render_groups_page():
                     st.markdown("---")
         else:
             st.info("Você ainda não está em nenhum grupo")
+            if st.button("🔍 Explorar Grupos Públicos"):
+                st.session_state.page = "explore"
+                rerun()
 
     with tab2:
         groups = load_data("groups.json", [])
@@ -647,12 +654,257 @@ def render_groups_page():
                 else:
                     st.error("Preencha todos os campos obrigatórios (*)")
 
-# (As funções render_new_recommendation_page, render_my_recommendations_page
-# e main_app permanecem semelhantes às anteriores, apenas usando os getters seguros)
+def render_new_recommendation_page():
+    """Renderiza a página de nova recomendação"""
+    st.title("Nova Indicação")
 
-# Continuar com as outras funções do app anterior...
+    if not st.session_state.current_group:
+        st.warning("⚠️ Você precisa entrar em um grupo primeiro para fazer indicações")
 
-# Ponto de entrada
+        groups = load_data("groups.json", [])
+        user_groups = [g for g in groups if st.session_state.username in g.get("members", [])]
+
+        if user_groups:
+            st.info("Selecione um grupo:")
+            for group in user_groups:
+                if st.button(f"📁 {group.get('name', 'Sem nome')}", key=f"select_for_rec_{group.get('id')}"):
+                    st.session_state.current_group = group.get("id")
+                    save_user_preferred_group(st.session_state.username, group.get("id"))
+                    rerun()
+        else:
+            st.info("Você não está em nenhum grupo ainda")
+            if st.button("👥 Ir para Grupos"):
+                st.session_state.page = "groups"
+                rerun()
+
+        return
+
+    # Se tem grupo selecionado
+    groups = load_data("groups.json", [])
+    current_group = next((g for g in groups if g.get("id") == st.session_state.current_group), None)
+
+    if current_group:
+        with st.form("recommendation_form"):
+            st.markdown(f"**Grupo atual:** {current_group.get('name', 'Sem nome')}")
+
+            title = st.text_input("Título da Indicação*")
+            description = st.text_area("Descrição detalhada*", height=150)
+
+            # Usar categorias do grupo
+            categories = current_group.get("categories", [])
+            if not categories:
+                categories = ["Geral"]
+            category = st.selectbox("Categoria*", categories)
+
+            col1, col2 = st.columns(2)
+            with col1:
+                rating = st.slider("Avaliação*", 1, 5, 5)
+            with col2:
+                tags = st.text_input("Tags (separadas por vírgula)")
+
+            # Dicas
+            with st.expander("💡 Dicas para uma boa recomendação"):
+                st.markdown("""
+                - Seja específico na descrição
+                - Explique por que recomenda
+                - Inclua detalhes relevantes
+                - Use tags para facilitar a busca
+                """)
+
+            submitted = st.form_submit_button("📤 Publicar Indicação")
+
+            if submitted:
+                if title and description:
+                    success, message = add_recommendation(title, description, category, rating, tags)
+                    if success:
+                        st.success(message)
+                        time.sleep(1)
+                        st.session_state.page = "home"
+                        rerun()
+                    else:
+                        st.error(message)
+                else:
+                    st.error("Preencha os campos obrigatórios (*)")
+    else:
+        st.error("Grupo não encontrado")
+
+def render_my_recommendations_page():
+    """Renderiza a página das minhas recomendações"""
+    st.title("Minhas Indicações")
+
+    recommendations = get_user_recommendations(st.session_state.username)
+
+    if recommendations:
+        st.subheader(f"📊 {len(recommendations)} Recomendações Criadas")
+
+        # Estatísticas
+        col1, col2, col3, col4 = st.columns(4)
+        with col1:
+            total_likes = sum(r.get("likes", 0) for r in recommendations)
+            total_dislikes = sum(r.get("dislikes", 0) for r in recommendations)
+            st.metric("Saldo Likes", f"{total_likes - total_dislikes}")
+        with col2:
+            avg_rating = sum(r.get("rating", 0) for r in recommendations) / len(recommendations)
+            st.metric("Média Avaliação", f"{avg_rating:.1f}/5")
+        with col3:
+            categories = len(set(r.get("category", "") for r in recommendations if r.get("category")))
+            st.metric("Categorias", categories)
+        with col4:
+            groups = len(set(r.get("group_id") for r in recommendations if r.get("group_id")))
+            st.metric("Grupos", groups)
+
+        st.markdown("---")
+
+        # Lista de recomendações
+        for rec in sorted(recommendations, key=lambda x: x.get("created_at", ""), reverse=True):
+            groups = load_data("groups.json", [])
+            group_name = next((g.get("name", "Grupo Desconhecido") for g in groups if g.get("id") == rec.get("group_id")), "Grupo Desconhecido")
+
+            likes = rec.get("likes", 0)
+            dislikes = rec.get("dislikes", 0)
+
+            with st.expander(f"{rec.get('title', 'Sem título')} | ⭐ {rec.get('rating', 0)}/5 | 👍 {likes} | 👎 {dislikes} | 📁 {group_name}"):
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.markdown(f"**Categoria:** {rec.get('category', 'Sem categoria')}")
+                    st.markdown(f"**Descrição:** {rec.get('description', 'Sem descrição')}")
+                    tags = rec.get("tags", [])
+                    st.markdown(f"**Tags:** {', '.join(tags) if tags else 'Nenhuma'}")
+                with col2:
+                    st.markdown(f"**Grupo:** {group_name}")
+                    created = rec.get("created_at", "")
+                    st.markdown(f"**Data:** {created[:10] if created else 'Data desconhecida'}")
+                    st.markdown(f"**Likes:** {likes}")
+                    st.markdown(f"**Dislikes:** {dislikes}")
+
+                    # Botão para ir para o grupo
+                    if st.button("Ir para grupo", key=f"goto_{rec.get('id')}"):
+                        st.session_state.current_group = rec.get("group_id")
+                        save_user_preferred_group(st.session_state.username, rec.get("group_id"))
+                        st.session_state.page = "home"
+                        rerun()
+    else:
+        st.info("Você ainda não fez nenhuma indicação")
+        st.markdown("""
+        ### Comece a compartilhar suas indicações!
+
+        **Ideias do que compartilhar:**
+        - Filmes que você amou
+        - Séries que maratonou
+        - Produtos que realmente funcionam
+        - Restaurantes imperdíveis
+        - Livros que mudaram sua perspectiva
+        """)
+
+        if st.button("📝 Fazer minha primeira indicação"):
+            st.session_state.page = "new_recommendation"
+            rerun()
+
+# ==================== PÁGINA PRINCIPAL DO APLICATIVO ====================
+
+def main_app():
+    st.sidebar.title(f"👋 Olá, {st.session_state.username}!")
+
+    # ===== Seletor de grupos no sidebar =====
+    st.sidebar.markdown("---")
+    st.sidebar.subheader("📁 Grupo Atual")
+
+    groups = load_data("groups.json", [])
+    user_groups = [g for g in groups if st.session_state.username in g.get("members", [])]
+
+    if user_groups:
+        # Encontra o grupo atual
+        current_group_info = None
+        if st.session_state.current_group:
+            current_group_info = next(
+                (g for g in user_groups if g.get("id") == st.session_state.current_group),
+                None
+            )
+
+        # Lista de grupos para seleção
+        group_names = [g.get("name", "Sem nome") for g in user_groups]
+
+        # Índice do grupo atual na lista
+        current_index = 0
+        if current_group_info:
+            try:
+                current_index = group_names.index(current_group_info.get("name", "Sem nome"))
+            except ValueError:
+                current_index = 0
+
+        # Dropdown para selecionar grupo
+        selected_group_name = st.sidebar.selectbox(
+            "Selecione seu grupo:",
+            options=group_names,
+            index=current_index,
+            key="group_selector"
+        )
+
+        # Atualiza quando selecionar diferente
+        if selected_group_name:
+            selected_group = next(g for g in user_groups if g.get("name") == selected_group_name)
+            if selected_group.get("id") != st.session_state.current_group:
+                st.session_state.current_group = selected_group.get("id")
+                save_user_preferred_group(st.session_state.username, selected_group.get("id"))
+                st.sidebar.success(f"Grupo '{selected_group_name}' selecionado!")
+                time.sleep(0.5)
+                rerun()
+
+        # Mostra informações do grupo atual
+        if current_group_info:
+            st.sidebar.markdown(f"**Grupo:** {current_group_info.get('name', 'Sem nome')}")
+            st.sidebar.markdown(f"**Membros:** {len(current_group_info.get('members', []))}")
+            categories = current_group_info.get('categories', [])
+            st.sidebar.markdown(f"**Categorias:** {', '.join(categories[:2])}")
+
+            # Botão para ver detalhes
+            if st.sidebar.button("📊 Ver detalhes do grupo"):
+                st.session_state.show_group_details = not st.session_state.show_group_details
+                rerun()
+    else:
+        st.sidebar.warning("Você não está em nenhum grupo")
+        if st.sidebar.button("👥 Explorar grupos"):
+            st.session_state.page = "groups"
+            rerun()
+
+    # Menu principal
+    st.sidebar.markdown("---")
+    menu_options = ["🏠 Início", "👥 Grupos", "📝 Nova Indicação", "⭐ Minhas Indicações"]
+
+    # Atualiza página baseada na escolha
+    choice = st.sidebar.radio("Navegação", menu_options)
+
+    if choice == "🏠 Início":
+        st.session_state.page = "home"
+    elif choice == "👥 Grupos":
+        st.session_state.page = "groups"
+    elif choice == "📝 Nova Indicação":
+        st.session_state.page = "new_recommendation"
+    elif choice == "⭐ Minhas Indicações":
+        st.session_state.page = "my_recommendations"
+
+    st.sidebar.markdown("---")
+
+    # Informações do usuário
+    st.sidebar.markdown("### 👤 Meu Perfil")
+    st.sidebar.write(f"Usuário: {st.session_state.username}")
+
+    # Botão de logout
+    if st.sidebar.button("🚪 Sair", use_container_width=True):
+        logout()
+
+    # Renderiza a página atual
+    if st.session_state.page == "home":
+        render_home_page()
+    elif st.session_state.page == "groups":
+        render_groups_page()
+    elif st.session_state.page == "new_recommendation":
+        render_new_recommendation_page()
+    elif st.session_state.page == "my_recommendations":
+        render_my_recommendations_page()
+
+# ==================== PONTO DE ENTRADA DA APLICAÇÃO ====================
+
 def main():
     if st.session_state.authenticated:
         main_app()
